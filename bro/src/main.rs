@@ -9,16 +9,19 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    OCR(OCR),
+    OCR(bro_ocr::OCR),
 }
 
-#[derive(Parser, Debug)]
-struct OCR {
-    #[arg(short, long)]
-    url: Option<String>,
+impl Command {
+    fn run(&self) {
+        match self {
+            Self::OCR(ocr) => ocr.run(),
+        }
+    }
 }
 
 fn main() {
     let cli = Cli::parse();
-    println!("cli: {cli:?}");
+    cli.command.run();
+    // println!("cli: {cli:?}");
 }
