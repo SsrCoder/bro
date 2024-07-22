@@ -1,0 +1,20 @@
+[package]
+name = "bro-ocr"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+clap = { version = "4.5.9", features = ["derive"] }
+image = "0.25.1"
+image-base64 = "0.1.0"
+mime = "0.3.17"
+mime_guess = "2.0.5"
+reqwest = { version = "0.12.5", features = ["blocking", "json"] }
+serde = { version = "1.0.204", features = ["derive"] }
+serde_json = "1.0.120"
+uuid = { version = "1.10.0", features = ["v4"] }
+
+[dev-dependencies]
+anyhow = "1.0.86"
+tracing-subscriber = "0.3.18"
+
