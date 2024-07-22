@@ -1,3 +1,4 @@
+pub mod subcommands;
 use clap::{Parser, Subcommand};
 
 #[derive(Parser, Debug)]
@@ -9,13 +10,13 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    OCR(bro_ocr::OCR),
+    Ocr(subcommands::Ocr),
 }
 
 impl Command {
     fn run(&self) {
         match self {
-            Self::OCR(ocr) => ocr.run(),
+            Self::Ocr(ocr) => ocr.run(),
         }
     }
 }

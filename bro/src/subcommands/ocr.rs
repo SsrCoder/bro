@@ -1,12 +1,20 @@
 use std::fs;
 
 use clap::Parser;
+use clipboard_rs::{common::RustImage, Clipboard, ClipboardContext};
 use reqwest::{blocking::Client, header::HeaderMap};
 use serde::Deserialize;
 use serde_json::json;
 
+type Error = Box<dyn std::error::Error>;
+type Result<T> = core::result::Result<T, Error>;
+
 #[derive(Parser, Debug, Default)]
-pub struct OCR {
+pub struct Ocr {
+    #[arg(short, long, help = "get image from clipboard")]
+    pub clipboard: bool,
+    #[arg(short, long, help = "write result to clipboard")]
+    pub write_clipboard: bool,
     #[arg(short, long)]
     pub path: Option<String>,
     // #[arg(short, long)]
@@ -59,18 +67,66 @@ struct WordsResult {
 //     y: i32,
 // }
 
-type Error = Box<dyn std::error::Error>;
+struct Image {
+    base64: String,
+    size: usize,
+}
 
-impl OCR {
+impl Image {
+    pub fn new_from_clipboard() -> Result<Image> {
+        let img = ClipboardContext::new()
+            .unwrap()
+            .get_image()
+            .or::<&str>(Err("can not get image from clipboard"))?;
+
+        img.save_to_path("image.png")
+            .or::<&str>(Err("can not save image from clipboard"))?;
+        let img = image::open("image.png")?.to_rgb8();
+        img.save("image.jpg")?;
+
+        let image = Image {
+            size: fs::metadata("image.jpg")?.len() as usize,
+            base64: image_base64::to_base64("image.jpg"),
+        };
+
+        fs::remove_file("image.jpg")?;
+        Ok(image)
+    }
+
+    pub fn new_from_path(path: &str) -> Result<Image> {
+        let mut is_temp_file = false;
+        let mut path = path;
+        if mime_guess::from_path(path).first_or_octet_stream() == mime::IMAGE_PNG {
+            let img = image::open(path)?.to_rgb8();
+            img.save("image.jpg")?;
+            path = "image.jpg";
+            is_temp_file = true;
+        }
+
+        let size = fs::metadata(path)?.len();
+        let image = image_base64::to_base64(path);
+        if is_temp_file {
+            fs::remove_file(path)?;
+        }
+
+        Ok(Image {
+            size: size as usize,
+            base64: image,
+        })
+    }
+}
+
+impl Ocr {
     pub fn run(&self) {
         self.handle().unwrap()
     }
 
-    pub fn handle(&self) -> Result<(), Error> {
+    pub fn handle(&self) -> Result<()> {
+        let image = self.get_image()?;
+
         let client = self.new_client()?;
         let (token, engine) = self.get_upload_token_and_engine(&client)?;
-
-        let job_id = self.upload_image(&client, &token, &engine)?;
+        let job_id = self.upload_image(&client, &token, &engine, &image)?;
         let yd_resp = self.get_result(&client, &job_id, &engine)?;
 
         let res = yd_resp.words_result.iter().fold(String::new(), |acc, x| {
@@ -80,8 +136,11 @@ impl OCR {
                 format!("{acc}{}", x.words)
             }
         });
-
         println!("{res}");
+
+        if self.write_clipboard {
+            ClipboardContext::new().unwrap().set_text(res).unwrap();
+        }
 
         Ok(())
     }
@@ -91,7 +150,7 @@ impl OCR {
         client: &reqwest::blocking::Client,
         job_id: &str,
         engine: &str,
-    ) -> Result<YDResp, Error> {
+    ) -> Result<YDResp> {
         for _ in 0..30 {
             let res = client
                 .get(format!(
@@ -106,32 +165,29 @@ impl OCR {
         Err("timeout".into())
     }
 
+    fn get_image(&self) -> Result<Image> {
+        if let Some(path) = &self.path {
+            Ok(Image::new_from_path(path)?)
+        } else if self.clipboard {
+            Ok(Image::new_from_clipboard()?)
+        } else {
+            Err("can not parse image".into())
+        }
+    }
+
     fn upload_image(
         &self,
         client: &reqwest::blocking::Client,
         token: &str,
         engine: &str,
-    ) -> Result<String, Error> {
-        let mut is_temp_file = false;
-        let mut path = self.path.as_deref().unwrap();
-        if mime_guess::from_path(path).first_or_octet_stream() == mime::IMAGE_PNG {
-            let img = image::open(path)?.to_rgb8();
-            img.save("image.jpg")?;
-            path = "image.jpg";
-            is_temp_file = true;
-        }
-
-        let size = fs::metadata(path)?.len();
-        let image = image_base64::to_base64(path);
-        if is_temp_file {
-            fs::remove_file(path)?;
-        }
+        image: &Image,
+    ) -> Result<String> {
         let body = json!({
             "token": token,
             "hash": "",
             "name": "image.png",
-            "size": size,
-            "dataUrl": image,
+            "size": image.size,
+            "dataUrl": image.base64,
             "result": {},
             "status": "processing",
             "isSuccess": false
@@ -157,7 +213,7 @@ impl OCR {
     fn get_upload_token_and_engine(
         &self,
         client: &reqwest::blocking::Client,
-    ) -> Result<(String, String), Error> {
+    ) -> Result<(String, String)> {
         #[derive(Deserialize)]
         struct ResponseData {
             token: String,
@@ -173,7 +229,7 @@ impl OCR {
         Ok((resp.data.token, resp.data.engine))
     }
 
-    fn new_client(&self) -> Result<reqwest::blocking::Client, Error> {
+    fn new_client(&self) -> Result<reqwest::blocking::Client> {
         let uuid = uuid::Uuid::new_v4().to_string();
         let token = self.get_auth_token(&uuid)?;
 
@@ -185,7 +241,7 @@ impl OCR {
         Ok(Client::builder().default_headers(headers).build()?)
     }
 
-    fn get_auth_token(&self, uuid: &str) -> Result<String, Error> {
+    fn get_auth_token(&self, uuid: &str) -> Result<String> {
         let mut headers = HeaderMap::new();
         headers.insert("Content-Type", "application/json".parse()?);
         headers.insert("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36 Edg/126.0.0.0".parse()?);
